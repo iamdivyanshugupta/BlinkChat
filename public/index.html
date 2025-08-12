@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BlinkChat</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="auth-section">
+    <div id="login-form">
+      <h2>Login</h2>
+      <input type="text" id="auth-username" placeholder="Username">
+      <input type="password" id="auth-password" placeholder="Password">
+      <div class="auth-buttons">
+        <button id="login-btn">Login</button>
+      </div>
+      <div class="error-message" id="auth-error"></div>
+      <div class="toggle-form">
+        Don't have an account? <a href="#" id="show-signup">Sign Up</a>
+      </div>
+    </div>
+    <div id="signup-form" style="display: none;">
+      <h2>Sign Up</h2>
+      <input type="text" id="auth-username-signup" placeholder="Username">
+      <input type="password" id="auth-password-signup" placeholder="Password">
+      <div class="auth-buttons">
+        <button id="signup-btn">Sign Up</button>
+      </div>
+      <div class="error-message" id="auth-error-signup"></div>
+      <div class="toggle-form">
+        Already have an account? <a href="#" id="show-login">Login</a>
+      </div>
+    </div>
+  </div>
+
+  <div id="chat-container" style="display: none;">
+    <div class="chat-layout">
+      <div class="online-users-box">
+        <h3>Online Users</h3>
+        <ul id="online-users-list"></ul>
+      </div>
+      <div style="flex: 1;">
+        <div class="chat-header">
+          <input type="text" id="recipient" placeholder="Recipient" readonly>
+          <button id="logout-btn">Logout</button>
+        </div>
+        <div id="typing-indicator"></div>
+        <div class="chat-box" id="messages"></div>
+        <form id="chat-form">
+          <input type="text" id="message-input" placeholder="Type a message...">
+          <button type="submit">Send</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
