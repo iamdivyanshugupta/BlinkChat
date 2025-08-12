@@ -1,14 +1,22 @@
 const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
-const io = require('socket.io')(http);
+
+// ✅ Add CORS support for Render (important for online access)
+const io = require('socket.io')(http, {
+  cors: {
+    origin: "*", // you can replace "*" with your frontend URL for security
+    methods: ["GET", "POST"]
+  }
+});
+
 const path = require('path');
 const fs = require('fs');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcrypt');
 
-const PORT = 3000;
-const HOST = '0.0.0.0';
+// ✅ Use Render's PORT environment variable or fallback to 3000
+const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10; // Number of rounds for bcrypt hashing
 
 // Middleware
@@ -54,7 +62,6 @@ app.post('/signup', async (req, res) => {
   if (existing) return res.status(409).json({ success: false, message: 'Username already exists.' });
 
   try {
-    // Hash the password
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
     users.push({ username, password: hashedPassword });
     writeUsers(users);
@@ -75,7 +82,6 @@ app.post('/login', async (req, res) => {
   if (!user) return res.status(401).json({ success: false, message: 'Invalid credentials.' });
 
   try {
-    // Compare provided password with stored hash
     const match = await bcrypt.compare(password, user.password);
     if (match) {
       res.json({ success: true, message: 'Login successful.' });
@@ -89,20 +95,18 @@ app.post('/login', async (req, res) => {
 });
 
 // Track connected users
-const connectedUsers = new Map(); // Map to store socket IDs and usernames
+const connectedUsers = new Map();
 
 // Socket.io Chat Logic
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  // User joined
   socket.on('user joined', (username) => {
-    connectedUsers.set(socket.id, username); // Add user to connected users
+    connectedUsers.set(socket.id, username);
     io.emit('user joined', username);
-    io.emit('online users', Array.from(connectedUsers.values())); // Broadcast online users
+    io.emit('online users', Array.from(connectedUsers.values()));
   });
 
-  // Send chat history for a specific user pair
   socket.on('request chat history', ({ sender, recipient }) => {
     db.all(
       `SELECT sender, recipient, msg, timestamp FROM messages 
@@ -119,9 +123,7 @@ io.on('connection', (socket) => {
     );
   });
 
-  // New private message
   socket.on('private message', ({ sender, recipient, msg }) => {
-    // Generate UTC timestamp (yyyy-MM-dd HH:mm:ss)
     const now = new Date();
     const pad = (num) => String(num).padStart(2, '0');
     const timestamp = `${now.getUTCFullYear()}-${pad(now.getUTCMonth() + 1)}-${pad(now.getUTCDate())} ${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())}`;
@@ -134,9 +136,7 @@ io.on('connection', (socket) => {
           console.error('DB Insert Error:', err.message);
           return;
         }
-        // Emit to sender
         socket.emit('private message', { sender, recipient, msg, timestamp });
-        // Emit to recipient if online
         const recipientSocketId = Array.from(connectedUsers).find(([id, name]) => name === recipient)?.[0];
         if (recipientSocketId) {
           io.to(recipientSocketId).emit('private message', { sender, recipient, msg, timestamp });
@@ -145,7 +145,6 @@ io.on('connection', (socket) => {
     );
   });
 
-  // Typing
   socket.on('typing', ({ sender, recipient }) => {
     const recipientSocketId = Array.from(connectedUsers).find(([id, name]) => name === recipient)?.[0];
     if (recipientSocketId) {
@@ -153,7 +152,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Stop Typing
   socket.on('stop typing', ({ sender, recipient }) => {
     const recipientSocketId = Array.from(connectedUsers).find(([id, name]) => name === recipient)?.[0];
     if (recipientSocketId) {
@@ -162,30 +160,27 @@ io.on('connection', (socket) => {
   });
 
   socket.on('manual logout', (username) => {
-  // Find the socket ID for the username
-  const entry = Array.from(connectedUsers.entries()).find(([id, name]) => name === username);
-  if (entry) {
-    const [socketId] = entry;
-    connectedUsers.delete(socketId);
-    io.emit('user left', username);
-    io.emit('online users', Array.from(connectedUsers.values()));
-  }
-});
+    const entry = Array.from(connectedUsers.entries()).find(([id, name]) => name === username);
+    if (entry) {
+      const [socketId] = entry;
+      connectedUsers.delete(socketId);
+      io.emit('user left', username);
+      io.emit('online users', Array.from(connectedUsers.values()));
+    }
+  });
 
-
-  // Disconnection
   socket.on('disconnect', () => {
     console.log('A user disconnected:', socket.id);
     const username = connectedUsers.get(socket.id);
     if (username) {
-      connectedUsers.delete(socket.id); // Remove user from connected users
-      io.emit('user left', username); // Notify others
-      io.emit('online users', Array.from(connectedUsers.values())); // Broadcast online users
+      connectedUsers.delete(socket.id);
+      io.emit('user left', username);
+      io.emit('online users', Array.from(connectedUsers.values()));
     }
   });
 });
 
-// Start Server
+// ✅ Start Server
 http.listen(PORT, () => {
-  console.log(`Server running at http://${HOST}:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
