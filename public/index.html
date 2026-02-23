@@ -1,13 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>BlinkChat</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700&display=swap"
+    rel="stylesheet">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
 </head>
+
 <body>
   <div id="auth-section">
+    <!-- Brand Header -->
+    <div class="brand-header">
+      <div class="brand-logo"><i class="ph ph-lightning"></i></div>
+      <div class="brand-name">BlinkChat</div>
+      <div class="brand-tagline">Real-time messaging, redefined</div>
+    </div>
+
     <div id="login-form">
       <h2>Login</h2>
       <input type="text" id="auth-username" placeholder="Username">
@@ -32,24 +46,31 @@
         Already have an account? <a href="#" id="show-login">Login</a>
       </div>
     </div>
+
+    <!-- Creator Credit -->
+    <div class="creator-credit">Made with <span class="heart">&hearts;</span> by <strong>Divyanshu</strong></div>
   </div>
 
   <div id="chat-container" style="display: none;">
     <div class="chat-layout">
+      <div id="sidebar-overlay" class="mobile-only"></div>
       <div class="online-users-box">
-        <h3>Online Users</h3>
-        <ul id="online-users-list"></ul>
-      </div>
-      <div style="flex: 1;">
-        <div class="chat-header">
-          <input type="text" id="recipient" placeholder="Recipient" readonly>
-          <button id="logout-btn">Logout</button>
+        <div class="sidebar-header">
+          <h3>Online Users</h3>
         </div>
-        <div id="typing-indicator"></div>
+        <ul id="online-users-list"></ul>
+        <div class="sidebar-creator">Made by <strong>Divyanshu</strong></div>
+      </div>
+      <div class="chat-main">
+        <div class="chat-header">
+          <button id="sidebar-toggle" class="mobile-only"><i class="ph ph-list"></i></button>
+          <input type="text" id="recipient" placeholder="Recipient" readonly>
+          <button id="logout-btn"><i class="ph ph-sign-out"></i> Logout</button>
+        </div>
         <div class="chat-box" id="messages"></div>
         <form id="chat-form">
           <input type="text" id="message-input" placeholder="Type a message...">
-          <button type="submit">Send</button>
+          <button type="submit"><i class="ph ph-paper-plane-right"></i></button>
         </form>
       </div>
     </div>
@@ -58,4 +79,5 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="script.js"></script>
 </body>
+
 </html>

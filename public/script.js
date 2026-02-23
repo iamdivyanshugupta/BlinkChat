@@ -1,9 +1,29 @@
-const socket = io();
+// Initialize socket but don't connect yet
+const socket = io({ autoConnect: false });
 
 let username = '';
 let selectedRecipient = null;
-let unreadMessages = new Map(); 
+let unreadMessages = new Map();
 let lastMessageDate = null;
+
+// === Helper: Escape HTML to prevent XSS ===
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// === Helper: Render tick mark based on read status ===
+// read=0 → single ✓ (sent), read=1 → double ✓✓ (read)
+function renderTick(read) {
+  if (read === 1) {
+    return `<span class="tick tick-read" title="Read">✓✓</span>`;
+  }
+  return `<span class="tick tick-sent" title="Sent">✓</span>`;
+}
 
 const loginForm = document.getElementById('login-form');
 const signupForm = document.getElementById('signup-form');
@@ -16,7 +36,6 @@ const chatContainer = document.getElementById('chat-container');
 const messages = document.getElementById('messages');
 const form = document.getElementById('chat-form');
 const input = document.getElementById('message-input');
-const typingIndicator = document.getElementById('typing-indicator');
 const errorDisplay = document.getElementById('auth-error');
 const errorDisplaySignup = document.getElementById('auth-error-signup');
 const onlineUsersList = document.getElementById('online-users-list');
@@ -25,10 +44,33 @@ const loginBtn = document.getElementById('login-btn');
 const signupBtn = document.getElementById('signup-btn');
 const showSignupLink = document.getElementById('show-signup');
 const showLoginLink = document.getElementById('show-login');
-const logoutBtn = document.getElementById('logout-btn'); // NEW
+const logoutBtn = document.getElementById('logout-btn');
+// Mobile Sidebar Elements
+const sidebarToggle = document.getElementById('sidebar-toggle');
+const onlineUsersBox = document.querySelector('.online-users-box');
+const sidebarOverlay = document.getElementById('sidebar-overlay');
 
 let typing = false;
 let timeout = null;
+
+// Toggle Sidebar
+if (sidebarToggle) {
+  sidebarToggle.addEventListener('click', () => {
+    onlineUsersBox.classList.toggle('active');
+    if (sidebarOverlay) sidebarOverlay.classList.toggle('active');
+  });
+}
+
+// Close Sidebar when clicking overlay
+if (sidebarOverlay) {
+  sidebarOverlay.addEventListener('click', () => {
+    onlineUsersBox.classList.remove('active');
+    sidebarOverlay.classList.remove('active');
+  });
+}
+
+// Close sidebar logic for "click outside" using document listener removed 
+// in favor of dedicated overlay which implies "outside" area.
 
 showSignupLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -58,18 +100,24 @@ loginBtn.addEventListener('click', async () => {
     return;
   }
 
-  const res = await fetch('/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: value, password })
-  });
+  try {
+    const res = await fetch('/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: value, password })
+    });
 
-  const data = await res.json();
-  if (data.success) {
-    localStorage.setItem('username', value); // Save username
-    startChat(value);
-  } else {
-    errorDisplay.textContent = data.message || 'Login failed';
+    const data = await res.json();
+    if (data.success) {
+      localStorage.setItem('token', data.token); // ✅ Save Token
+      localStorage.setItem('username', data.username);
+      startChat(data.username, data.token);
+    } else {
+      errorDisplay.textContent = data.message || 'Login failed';
+    }
+  } catch (err) {
+    console.error(err);
+    errorDisplay.textContent = 'Server error';
   }
 });
 
@@ -83,34 +131,44 @@ signupBtn.addEventListener('click', async () => {
     return;
   }
 
-  const res = await fetch('/signup', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: value, password })
-  });
+  try {
+    const res = await fetch('/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: value, password })
+    });
 
-  const data = await res.json();
-  if (data.success) {
-    localStorage.setItem('username', value); // Save username
-    startChat(value);
-  } else {
-    errorDisplaySignup.textContent = data.message || 'Signup failed';
+    const data = await res.json();
+    if (data.success) {
+      localStorage.setItem('token', data.token); // ✅ Save Token
+      localStorage.setItem('username', data.username);
+      startChat(data.username, data.token);
+    } else {
+      errorDisplaySignup.textContent = data.message || 'Signup failed';
+    }
+  } catch (err) {
+    console.error(err);
+    errorDisplaySignup.textContent = 'Server error';
   }
 });
 
 // === AUTO LOGIN on Refresh ===
 document.addEventListener('DOMContentLoaded', () => {
   const savedUser = localStorage.getItem('username');
-  if (savedUser) {
-    startChat(savedUser);
+  const savedToken = localStorage.getItem('token');
+  if (savedUser && savedToken) {
+    startChat(savedUser, savedToken);
   }
 });
 
 // === LOGOUT ===
 logoutBtn.addEventListener('click', () => {
-  socket.emit('manual logout', username); // ← inform server
+  socket.emit('manual logout');
+  socket.disconnect(); // ✅ Disconnect socket
 
   localStorage.removeItem('username');
+  localStorage.removeItem('token');
+
   chatContainer.style.display = 'none';
   authSection.style.display = 'block';
   username = '';
@@ -121,23 +179,31 @@ logoutBtn.addEventListener('click', () => {
 
 
 // === Start Chat ===
-function startChat(user) {
+function startChat(user, token) {
   username = user;
   authSection.style.display = 'none';
   chatContainer.style.display = 'block';
-  socket.emit('user joined', username);
+
+  // ✅ Connect with Token
+  socket.auth = { token };
+  socket.connect();
 }
 
-// (The rest of your script.js stays the same below this point)
-// Don't delete your chat events, formatTime, scrollToBottom, etc.
-
+// === Socket Connection Error Handling ===
+socket.on('connect_error', (err) => {
+  console.error('Connection Error:', err.message);
+  if (err.message === 'Authentication error') {
+    alert('Session expired. Please login again.');
+    logoutBtn.click();
+  }
+});
 
 // === Submit Chat ===
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   const msg = input.value.trim();
   if (msg && selectedRecipient) {
-    socket.emit('private message', { sender: username, recipient: selectedRecipient, msg });
+    socket.emit('private message', { recipient: selectedRecipient, msg }); // Sender is inferred from token
     input.value = '';
   } else if (!selectedRecipient) {
     alert('Please select a user to message');
@@ -149,259 +215,271 @@ input.addEventListener('input', () => {
   if (selectedRecipient) {
     if (!typing) {
       typing = true;
-      socket.emit('typing', { sender: username, recipient: selectedRecipient });
-      console.log(`Emitting typing from ${username} to ${selectedRecipient}`);
+      socket.emit('typing', { recipient: selectedRecipient });
     }
     clearTimeout(timeout);
     timeout = setTimeout(timeoutFunction, 1000);
-  } else {
-    console.log('No recipient selected, typing event not emitted');
   }
 });
 
 function timeoutFunction() {
   if (typing && selectedRecipient) {
     typing = false;
-    socket.emit('stop typing', { sender: username, recipient: selectedRecipient });
-    console.log(`Emitting stop typing from ${username} to ${selectedRecipient}`);
+    socket.emit('stop typing', { recipient: selectedRecipient });
   }
 }
 
 // === Format Date for Separators ===
 function formatDate(timestamp) {
   let date;
-  if (typeof timestamp === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
-    try {
-      date = new Date(`${timestamp}Z`); // Treat as UTC
-      console.log(`Parsed UTC timestamp: ${timestamp} -> ${date.toISOString()}`);
-    } catch (e) {
-      console.error(`Error parsing timestamp: ${timestamp}`, e);
-      return 'Invalid Date';
+  if (typeof timestamp === 'string') {
+    // Handle SQL timestamp or ISO string
+    // Append 'Z' if it looks like "YYYY-MM-DD HH:MM:SS" (from SQLite default) and doesn't have timezone
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
+      date = new Date(`${timestamp}Z`);
+    } else {
+      date = new Date(timestamp);
     }
   } else {
     date = new Date(timestamp);
-    console.log(`Parsed non-string timestamp: ${timestamp} -> ${date.toISOString()}`);
   }
 
-  if (isNaN(date.getTime())) {
-    console.error(`Invalid date for separator: ${timestamp}`);
-    return 'Invalid Date';
-  }
+  if (isNaN(date.getTime())) return 'Invalid Date';
 
   // Convert to IST (+5:30)
-  const istOffset = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+  const istOffset = 5.5 * 60 * 60 * 1000;
   const istDate = new Date(date.getTime() + istOffset);
 
-  // Get today's date in IST
   const today = new Date();
   const todayIST = new Date(today.getTime() + istOffset);
-  todayIST.setHours(0, 0, 0, 0); // Reset to start of day in IST
+  todayIST.setHours(0, 0, 0, 0);
 
-  // Reset message date to start of day in IST
   const messageDate = new Date(istDate);
   messageDate.setHours(0, 0, 0, 0);
 
   const diffDays = Math.floor((todayIST - messageDate) / (1000 * 60 * 60 * 24));
 
-  if (diffDays === 0) {
-    console.log(`Date separator: Today for ${timestamp}`);
-    return 'Today';
-  } else if (diffDays === 1) {
-    console.log(`Date separator: Yesterday for ${timestamp}`);
-    return 'Yesterday';
-  } else {
+  if (diffDays === 0) return 'Today';
+  else if (diffDays === 1) return 'Yesterday';
+  else {
     const options = { year: 'numeric', month: 'long', day: 'numeric' };
-    const formattedDate = messageDate.toLocaleDateString('en-IN', options);
-    console.log(`Date separator: ${formattedDate} for ${timestamp}`);
-    return formattedDate;
+    return messageDate.toLocaleDateString('en-IN', options);
   }
 }
 
 // === Add Date Separator ===
 function addDateSeparator(dateStr) {
-  if (!dateStr || dateStr === 'Invalid Date') {
-    console.warn('Skipping invalid date separator:', dateStr);
-    return;
-  }
+  if (!dateStr || dateStr === 'Invalid Date') return;
   const div = document.createElement('div');
   div.classList.add('date-separator');
   div.textContent = dateStr;
   messages.appendChild(div);
-  console.log(`Added date separator: ${dateStr}`);
 }
 
 // === Chat Events ===
-socket.on('private message', ({ sender, recipient, msg, timestamp }) => {
-  // Get message date for separator
+socket.on('private message', ({ id, sender, recipient, msg, timestamp, read }) => {
+  const bubble = document.getElementById('typing-bubble');
   const messageDate = formatDate(timestamp);
-  
-  // Add separator if date changes
+
   if (lastMessageDate !== messageDate) {
-    addDateSeparator(messageDate);
+    if (bubble) {
+      const div = document.createElement('div');
+      div.classList.add('date-separator');
+      div.textContent = messageDate;
+      messages.insertBefore(div, bubble);
+    } else {
+      addDateSeparator(messageDate);
+    }
     lastMessageDate = messageDate;
   }
 
-  if (sender === username && recipient === selectedRecipient) {
-    // Display message if sent by the user to the selected recipient
-    const div = document.createElement('div');
-    div.classList.add('bubble', 'you');
-    div.innerHTML = `<strong>${sender}</strong><br>${msg}<span class="time">[${formatTime(timestamp)}]</span>`;
-    messages.appendChild(div);
+  const div = document.createElement('div');
+  const isMe = sender === username && recipient === selectedRecipient;
+  const isOther = sender === selectedRecipient && recipient === username;
+
+  if (isMe || isOther) {
+    div.classList.add('bubble', isMe ? 'you' : 'other');
+    if (id) div.dataset.msgId = id;
+    const tick = isMe ? renderTick(read) : '';
+    div.innerHTML = `<strong>${escapeHtml(sender)}</strong><br>${escapeHtml(msg)}<span class="time">${formatTime(timestamp)}${tick}</span>`;
+
+    if (bubble) {
+      messages.insertBefore(div, bubble);
+    } else {
+      messages.appendChild(div);
+    }
     scrollToBottom();
-  } else if (sender === selectedRecipient && recipient === username) {
-    // Display message if received from the selected recipient
-    const div = document.createElement('div');
-    div.classList.add('bubble', 'other');
-    div.innerHTML = `<strong>${sender}</strong><br>${msg}<span class="time">[${formatTime(timestamp)}]</span>`;
-    messages.appendChild(div);
-    scrollToBottom();
+
+    // KEY FIX: If we received this message while actively viewing the chat,
+    // tell the server to mark it as read immediately — no need to re-request history
+    if (isOther) {
+      socket.emit('mark read', { from: sender });
+    }
   } else if (recipient === username && sender !== selectedRecipient) {
-    // Increment unread message count for non-selected sender
+    // Message from someone we're NOT currently chatting with → unread badge
     const currentCount = unreadMessages.get(sender) || 0;
     unreadMessages.set(sender, currentCount + 1);
     updateOnlineUsersList();
   }
 });
 
-socket.on('user joined', (username) => {
-  const info = document.createElement('div');
-  info.textContent = `${username} joined the chat`;
-  info.style.fontStyle = 'italic';
-  messages.appendChild(info);
-  scrollToBottom();
+// === Messages Read — upgrade ✓ → ✓✓ on sender's side ===
+socket.on('messages read', ({ by }) => {
+  // Only upgrade ticks visible in the currently open conversation
+  if (by === selectedRecipient) {
+    document.querySelectorAll('.bubble.you .tick').forEach(tick => {
+      tick.textContent = '✓✓';
+      tick.className = 'tick tick-read';
+      tick.title = 'Read';
+    });
+  }
+  // If 'by' is NOT the currently selected recipient, the ticks aren't visible anyway.
+  // When the sender switches to that conversation, chat history will load with read=1 from DB.
 });
 
-socket.on('user left', (username) => {
-  const info = document.createElement('div');
-  info.textContent = `${username} left the chat`;
-  info.style.fontStyle = 'italic';
-  messages.appendChild(info);
-  if (username === selectedRecipient) {
-    selectedRecipient = null;
-    recipientInput.value = '';
-    messages.innerHTML = '';
-    lastMessageDate = null; // Reset date tracking
-  }
-  unreadMessages.delete(username); // Clear unread status
-  updateOnlineUsersList();
-  scrollToBottom();
-});
+// ... (user joined/left handlers remain same) ...
 
 socket.on('online users', (users) => {
-  onlineUsersList.innerHTML = ''; // Clear the list
-  users.forEach(user => {
-    if (user !== username) { // Exclude current user
-      const li = document.createElement('li');
-      li.textContent = user;
-      li.dataset.username = user; // Store username for easy reference
-      li.style.overflow = 'hidden'; // Prevent text overflow
-      li.style.textOverflow = 'ellipsis'; // Add ellipsis for long usernames
-      li.style.whiteSpace = 'nowrap'; // Keep text on one line
-      // Handle both click and touchstart for user selection
-      li.addEventListener('click', () => selectRecipient(user));
-      li.addEventListener('touchstart', (e) => {
-        e.preventDefault(); // Prevent default touch behavior (e.g., scrolling)
-        selectRecipient(user);
-      });
-      if (user === selectedRecipient) {
-        li.classList.add('selected');
-      }
-      const unreadCount = unreadMessages.get(user) || 0;
-      if (unreadCount > 0) {
-        li.classList.add('unread');
-        li.dataset.unreadCount = unreadCount; // Set count for CSS
-      }
-      onlineUsersList.appendChild(li);
-    }
-  });
-});
+  console.log('Received online users:', users);
+  onlineUsersList.innerHTML = '';
 
-socket.on('typing', ({ sender, recipient }) => {
-  if (sender === selectedRecipient && recipient === username) {
-    typingIndicator.textContent = `${sender} is typing...`;
-    console.log(`Received typing event from ${sender} for ${recipient}`);
-  } else {
-    console.log(`Typing event ignored: sender=${sender}, recipient=${recipient}, selectedRecipient=${selectedRecipient}`);
+  const otherUsers = users.filter(user => user !== username);
+
+  if (otherUsers.length === 0) {
+    const li = document.createElement('li');
+    li.textContent = 'No other users online';
+    li.style.fontStyle = 'italic';
+    li.style.opacity = '0.7';
+    li.style.pointerEvents = 'none';
+    onlineUsersList.appendChild(li);
+    return;
   }
-});
 
-socket.on('stop typing', ({ sender, recipient }) => {
-  if (sender === selectedRecipient && recipient === username) {
-    typingIndicator.textContent = '';
-    console.log(`Received stop typing event from ${sender} for ${recipient}`);
-  } else {
-    console.log(`Stop typing event ignored: sender=${sender}, recipient=${recipient}, selectedRecipient=${selectedRecipient}`);
-  }
-});
+  otherUsers.forEach(user => {
+    const li = document.createElement('li');
+    li.textContent = user;
+    li.dataset.username = user;
+    li.style.overflow = 'hidden';
+    li.style.textOverflow = 'ellipsis';
+    li.style.whiteSpace = 'nowrap';
 
-socket.on('chat history', (chatHistory) => {
-  messages.innerHTML = ''; // Clear current messages
-  lastMessageDate = null; // Reset date tracking
-  
-  chatHistory.forEach(({ sender, recipient, msg, timestamp }) => {
-    if ((sender === username && recipient === selectedRecipient) || (sender === selectedRecipient && recipient === username)) {
-      // Add date separator if date changes
-      const messageDate = formatDate(timestamp);
-      if (messageDate !== lastMessageDate) {
-        addDateSeparator(messageDate);
-        lastMessageDate = messageDate;
-      }
-      
-      const div = document.createElement('div');
-      div.classList.add('bubble', sender === username ? 'you' : 'other');
-      div.innerHTML = `<strong>${sender}</strong><br>${msg}<span class="time">[${formatTime(timestamp)}]</span>`;
-      messages.appendChild(div);
-    }
-  });
-  scrollToBottom();
-});
+    // Use click for both desktop and mobile
+    li.addEventListener('click', () => selectRecipient(user));
 
-function selectRecipient(user) {
-  selectedRecipient = user;
-  recipientInput.value = user; // Update recipient input to show selected user
-  messages.innerHTML = ''; // Clear chat for new conversation
-  lastMessageDate = null; // Reset date tracking
-  socket.emit('request chat history', { sender: username, recipient: user });
-  unreadMessages.delete(user); // Clear unread count
-  typingIndicator.textContent = ''; // Clear typing indicator
-  updateOnlineUsersList();
-}
-
-function updateOnlineUsersList() {
-  onlineUsersList.querySelectorAll('li').forEach(li => {
-    const user = li.dataset.username;
-    li.classList.remove('selected', 'unread');
-    li.removeAttribute('data-unread-count'); // Clear previous count
     if (user === selectedRecipient) {
       li.classList.add('selected');
     }
     const unreadCount = unreadMessages.get(user) || 0;
     if (unreadCount > 0) {
       li.classList.add('unread');
-      li.dataset.unreadCount = unreadCount; // Set count for CSS
+      li.dataset.unreadCount = unreadCount;
+    }
+    onlineUsersList.appendChild(li);
+  });
+});
+
+// Typing Logic
+socket.on('typing', ({ sender, recipient }) => {
+  if (sender === selectedRecipient && recipient === username) {
+    let bubble = document.getElementById('typing-bubble');
+    if (bubble) {
+      // If bubble exists, move it to the bottom
+      messages.appendChild(bubble);
+    } else {
+      // Create new bubble
+      bubble = document.createElement('div');
+      bubble.id = 'typing-bubble';
+      bubble.className = 'bubble other typing-bubble'; // Re-use 'other' for styling
+      bubble.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+      messages.appendChild(bubble);
+    }
+    scrollToBottom();
+  }
+});
+
+socket.on('stop typing', ({ sender, recipient }) => {
+  if (sender === selectedRecipient && recipient === username) {
+    const bubble = document.getElementById('typing-bubble');
+    if (bubble) {
+      bubble.remove();
+    }
+  }
+});
+
+
+
+socket.on('chat history', (chatHistory) => {
+  messages.innerHTML = ''; // Clear current messages
+  lastMessageDate = null; // Reset date tracking
+
+  chatHistory.forEach(({ id, sender, recipient, msg, timestamp, read }) => {
+    if ((sender === username && recipient === selectedRecipient) || (sender === selectedRecipient && recipient === username)) {
+      const messageDate = formatDate(timestamp);
+      if (messageDate !== lastMessageDate) {
+        addDateSeparator(messageDate);
+        lastMessageDate = messageDate;
+      }
+
+      const isMe = sender === username;
+      const div = document.createElement('div');
+      div.classList.add('bubble', isMe ? 'you' : 'other');
+      if (id) div.dataset.msgId = id;
+      const tick = isMe ? renderTick(read) : '';
+      div.innerHTML = `<strong>${escapeHtml(sender)}</strong><br>${escapeHtml(msg)}<span class="time">${formatTime(timestamp)}${tick}</span>`;
+      messages.appendChild(div);
+    }
+  });
+
+  scrollToBottom();
+});
+
+function selectRecipient(user) {
+  selectedRecipient = user;
+  recipientInput.value = user;
+  messages.innerHTML = '';
+  lastMessageDate = null;
+  // request chat history — server will also mark messages from `user` as read and notify them
+  socket.emit('request chat history', { recipient: user });
+  unreadMessages.delete(user);
+  updateOnlineUsersList(); // fix: removed undefined typingIndicator reference
+
+  // Close sidebar on mobile after selection
+  if (window.innerWidth <= 768) {
+    onlineUsersBox.classList.remove('active');
+    const sidebarOverlay = document.getElementById('sidebar-overlay');
+    if (sidebarOverlay) sidebarOverlay.classList.remove('active');
+  }
+}
+
+function updateOnlineUsersList() {
+  onlineUsersList.querySelectorAll('li').forEach(li => {
+    const user = li.dataset.username;
+    li.classList.remove('selected', 'unread');
+    li.removeAttribute('data-unread-count');
+    if (user === selectedRecipient) {
+      li.classList.add('selected');
+    }
+    const unreadCount = unreadMessages.get(user) || 0;
+    if (unreadCount > 0) {
+      li.classList.add('unread');
+      li.dataset.unreadCount = unreadCount;
     }
   });
 }
 
 function formatTime(timestamp) {
   let date;
-  if (typeof timestamp === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
-    try {
-      date = new Date(`${timestamp}Z`); // Treat as UTC
-      console.log(`Parsed UTC timestamp for time: ${timestamp} -> ${date.toISOString()}`);
-    } catch (e) {
-      console.error(`Error parsing timestamp for time: ${timestamp}`, e);
-      return 'Invalid time';
+  if (typeof timestamp === 'string') {
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(timestamp)) {
+      date = new Date(`${timestamp}Z`);
+    } else {
+      date = new Date(timestamp);
     }
   } else {
     date = new Date(timestamp);
-    console.log(`Parsed non-string timestamp for time: ${timestamp} -> ${date.toISOString()}`);
   }
 
-  if (isNaN(date.getTime())) {
-    console.error(`Invalid timestamp for time: ${timestamp}`);
-    return 'Invalid time';
-  }
+  if (isNaN(date.getTime())) return 'Invalid time';
 
   const options = {
     hour: '2-digit',

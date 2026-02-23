@@ -13,7 +13,19 @@
     "date-fns": "^4.1.0",
     "date-fns-tz": "^3.2.0",
     "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemon": "^3.1.14",
     "socket.io": "^4.8.1",
     "sqlite3": "^5.1.7"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iamdivyanshugupta/BlinkChat.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/iamdivyanshugupta/BlinkChat/issues"
+  },
+  "homepage": "https://github.com/iamdivyanshugupta/BlinkChat#readme"
 }
