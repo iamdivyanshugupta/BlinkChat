@@ -53,7 +53,7 @@ BlinkChat/
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/BlinkChat.git
+   git clone https://github.com/iamdivyanshugupta/BlinkChat.git
    cd BlinkChat
    ```
 
